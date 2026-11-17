@@ -13,6 +13,18 @@ except Exception:
 WORK = tempfile.mkdtemp(prefix="chatcut-st-")
 os.makedirs(WORK, exist_ok=True)
 
+def build_stamp():
+    """Read the stamp committed alongside this file, so the running app can
+    say exactly which build it is."""
+    try:
+        with open(os.path.join(HERE, "VERSION"), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except Exception:
+        return "unknown"
+
+
+BUILD = build_stamp()
+
 st.set_page_config(page_title="chatcut", page_icon="✂️", layout="wide")
 st.title("✂️ chatcut")
 st.caption("Chat to edit video. Free, local, open source. ffmpeg + whisper, no paid API.")
@@ -99,6 +111,23 @@ with st.sidebar:
     link = st.text_input("...or a link", placeholder="YouTube / Drive / direct MP4 URL")
     model_size = st.selectbox("Whisper model", ["tiny", "base", "small"], index=0)
     st.caption("tiny is fastest. bigger is more accurate and slower on CPU.")
+    st.divider()
+    st.caption(f"Build: **{BUILD}**")
+    with st.expander("What is in this build?"):
+        checks = [
+            ("whisper auto captions", hasattr(engine, "edit")),
+            ("caption styles", hasattr(engine, "list_styles")),
+            ("auto clips", hasattr(autoclip, "auto_clip")),
+            ("link inside the message", hasattr(__import__("sys").modules[__name__], "find_url")),
+            ("clip count routing", hasattr(__import__("sys").modules[__name__], "route")),
+            ("local model router", hasattr(router, "plan")),
+            ("MCP server", os.path.exists(os.path.join(HERE, "mcp_server.py"))),
+            ("active speaker port", hasattr(__import__("track"), "speaker_activity")),
+        ]
+        for name, ok in checks:
+            st.write(("yes  " if ok else "no   ") + name)
+    st.caption("If this stamp is not the newest one on GitHub, press "
+               "Manage app then Reboot.")
 
 tab_edit, tab_clips, tab_tl = st.tabs(["Edit", "Auto clips", "Timeline"])
 
