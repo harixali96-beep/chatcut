@@ -123,7 +123,11 @@ def _ass_ts(t):
 
 
 def build_ass(segments_or_srt, style_name, play_res=(1080, 1920),
-              max_words=5, margin_v=None):
+              max_words=5, margin_v=None, anchor_frac=None):
+    # anchor_frac: vertical centre for the caption block, 0=top 1=bottom.
+    # A stacked layout has a seam where the two panels meet, and captions
+    # belong there (ported from openshorts split_layout): the frame bottom
+    # is the lower speaker face.
     """Return ASS text. Accepts SRT text or a list of segments."""
     st = STYLES.get(style_name) or STYLES[pick_style()]
     if isinstance(segments_or_srt, str):
@@ -133,6 +137,14 @@ def build_ass(segments_or_srt, style_name, play_res=(1080, 1920),
 
     w, h = play_res
     margin_v = margin_v if margin_v is not None else int(h * 0.15)
+    align = 2
+    if anchor_frac is not None:
+        a = max(0.02, min(0.98, float(anchor_frac)))
+        line_h = int(h * 0.045)
+        if a <= 0.5:
+            align, margin_v = 8, max(0, int(a * h) - line_h // 2)
+        else:
+            align, margin_v = 2, max(0, int((1.0 - a) * h) - line_h // 2)
 
     def up(x):
         return x.upper() if st["uppercase"] else x
@@ -146,7 +158,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,{st['fontsize']},{st['primary']},{st['secondary']},{st['outline_color']},{st['back']},{st['bold']},0,0,0,100,100,0,0,1,{st['border']},{st['shadow']},2,60,60,{margin_v},1
+Style: Default,DejaVu Sans,{st['fontsize']},{st['primary']},{st['secondary']},{st['outline_color']},{st['back']},{st['bold']},0,0,0,100,100,0,0,1,{st['border']},{st['shadow']},{align},60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 
 import cv2
+import numpy as np
+from statistics import median
 
 MODEL_URLS = [
     "https://github.com/opencv/opencv_zoo/raw/main/models/"
@@ -260,9 +262,14 @@ def build_two_speaker_plan(video, out_w=1080, out_h=1920, sample_fps=4.0):
             src_w, crop_w)
         pts = simplify_path(pts, tol=6.0)
         e = crop_expression(pts, src_w, crop_w)
+        med_x = median([p[1] for p in grp])
+        med_y = median([p[2] for p in grp if p[2] is not None] or [0])
+        med_h = median([p[3] for p in grp if p[3] is not None] or [0])
+        box = [med_x - med_h / 2.0, med_y - med_h / 2.0, med_h, med_h]
         speakers.append({"index": i,
                          "x_range": [round(min(x for _, x in series), 1),
                                      round(max(x for _, x in series), 1)],
+                         "box": [round(v, 1) for v in box],
                          "path": [[round(t, 2), round(x, 1)] for t, x in pts]})
         filters.append(
             f"[s{i}]crop={crop_w}:{src_h}:{e}:0,scale={out_w}:{panel_h}[p{i}]")
@@ -270,8 +277,16 @@ def build_two_speaker_plan(video, out_w=1080, out_h=1920, sample_fps=4.0):
     graph = ("[0:v]split=2[sa][sb];"
              + "[sa]null[a0];[sb]null[s1];").replace("[sa]null[a0];", "")
     graph = "[0:v]split=2[s0][s1];" + ";".join(filters) +             f";[p0][p1]vstack=inputs=2[v]"
+    verdict = {"judged": False, "conversation": None, "shares": None}
+    try:
+        verdict = speaker_activity(video, [sp["box"] for sp in speakers])
+    except Exception as exc:
+        verdict["reason"] = f"active-speaker check failed: {exc}"
     return {"ok": True, "filter": graph, "panel": f"{out_w}x{panel_h}",
             "crop": f"{crop_w}x{src_h}", "speakers": speakers,
+            "conversation": verdict.get("conversation"),
+            "speaker_shares": verdict.get("shares"),
+            "speaker_reason": verdict.get("reason"),
             "source": {"w": src_w, "h": src_h}}
 
 
@@ -400,3 +415,105 @@ if __name__ == "__main__":
         print("faces found:", r["info"].get("faces_found"),
               "| path points:", r["info"].get("points"),
               "| x range:", r["info"].get("path_min"), "-", r["info"].get("path_max"))
+
+
+# ---------------------------------------------------------- active speaker
+# Ported from openshorts/active_speaker.py (MIT). Full diarisation is
+# overkill for "which of these two faces is moving its mouth right now":
+# measure frame-to-frame change in each mouth region, and only trust the
+# comparison in windows where the audio says somebody is speaking at all.
+# Off by default, like upstream openshorts: it is a heuristic and it must not
+# silently override clear geometry. SPEAKER_SIGNAL=1 lets it gate the split.
+SPEAKER_SIGNAL = os.environ.get("SPEAKER_SIGNAL", "0") == "1"
+WINDOW_SECONDS = 0.4
+AUDIO_FLOOR = 0.18      # a window is speech only above this share of the peak
+MIN_MARGIN = 0.18       # winner must beat the other by this share of the pair
+MIN_WINDOWS = 8         # too few speech windows and we do not judge
+
+
+def mouth_region(box, frame_w, frame_h):
+    """Pixel rect (x0, y0, x1, y1) around the mouth of a face box."""
+    x, y, w, h = [float(v) for v in box]
+    my = y + h * 0.72
+    mw, mh = max(8.0, w * 0.45), max(8.0, h * 0.16)
+    x0 = int(max(0, min(x + w / 2 - mw / 2, frame_w - 2)))
+    x1 = int(min(frame_w, max(x0 + 2, x + w / 2 + mw / 2)))
+    y0 = int(max(0, min(my - mh / 2, frame_h - 2)))
+    y1 = int(min(frame_h, max(y0 + 2, my + mh / 2)))
+    return x0, y0, x1, y1
+
+
+def audio_rms(path, window_s=WINDOW_SECONDS):
+    """Per-window RMS of the audio track, decoded with ffmpeg."""
+    p = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "16000",
+         "-f", "s16le", "-"], capture_output=True)
+    if not p.stdout:
+        return []
+    a = np.frombuffer(p.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    n = max(1, int(16000 * window_s))
+    return [float(np.sqrt(np.mean(a[i:i + n] ** 2)))
+            for i in range(0, max(1, len(a) - n + 1), n)]
+
+
+def speaker_activity(video, boxes, window_s=WINDOW_SECONDS, sample_fps=12.0):
+    """Which speaker holds the floor, from mouth motion plus audio energy."""
+    cap = cv2.VideoCapture(video)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    step = max(1, int(round(fps / sample_fps)))
+    regions = [mouth_region(b, fw, fh) for b in boxes]
+    rows, prev, idx = [], None, 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if idx % step == 0:
+            g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if prev is not None:
+                d = cv2.absdiff(g, prev)
+                rows.append((idx / fps,
+                             [float(d[y0:y1, x0:x1].mean())
+                              for x0, y0, x1, y1 in regions]))
+            prev = g
+        idx += 1
+    cap.release()
+
+    rms = audio_rms(video, window_s)
+    n_win = len(rms)
+    if n_win < MIN_WINDOWS or not rows:
+        return {"judged": False, "reason": "not enough audio or motion to judge",
+                "shares": None, "conversation": None}
+
+    tot = [[0.0] * len(boxes) for _ in range(n_win)]
+    cnt = [0] * n_win
+    for t, vals in rows:
+        k = int(t // window_s)
+        if 0 <= k < n_win:
+            for i, v in enumerate(vals):
+                tot[k][i] += v
+            cnt[k] += 1
+    for k in range(n_win):
+        if cnt[k]:
+            tot[k] = [v / cnt[k] for v in tot[k]]
+
+    peak = max(rms) or 1.0
+    shares_top = [max(1e-6, max(row[i] for row in tot)) for i in range(len(boxes))]
+    wins, speaking = [0] * len(boxes), 0
+    for k in range(n_win):
+        if rms[k] < AUDIO_FLOOR * peak:
+            continue
+        speaking += 1
+        row = [tot[k][i] / shares_top[i] for i in range(len(boxes))]
+        hi = max(range(len(row)), key=lambda i: row[i])
+        pair = sum(row) or 1e-6
+        if (row[hi] - min(row)) / pair >= MIN_MARGIN:
+            wins[hi] += 1
+
+    shares = [round(w / max(1, speaking), 3) for w in wins]
+    conversation = speaking >= MIN_WINDOWS and min(shares) >= 0.15
+    return {"judged": True, "shares": shares, "speaking_windows": speaking,
+            "windows": n_win, "conversation": conversation,
+            "reason": ("both speakers take turns" if conversation else
+                       "one voice holds the floor, stacking would waste the frame")}

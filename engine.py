@@ -324,13 +324,15 @@ def splice_layouts(split_p, single_p, intervals, dst, workdir):
     return parts
 
 
-def burn_captions(src, dst, srt_path, style_name, workdir, size, kept=None):
+def burn_captions(src, dst, srt_path, style_name, workdir, size, kept=None,
+                  anchor_frac=None):
     with open(srt_path, "r", encoding="utf-8", errors="ignore") as fh:
         srt = fh.read()
     remapped = None
     if kept:
         srt, remapped = remap_srt(srt, kept)
-    ass = _styles.build_ass(srt, style_name, play_res=size)
+    ass = _styles.build_ass(srt, style_name, play_res=size,
+                            anchor_frac=anchor_frac)
     ass_path = os.path.join(workdir, "captions.ass")
     with open(ass_path, "w", encoding="utf-8") as fh:
         fh.write(ass)
@@ -456,6 +458,7 @@ def render(src, ops, out_path, workdir, srt=None, music=None, style=None,
                  "-c:a", "copy", dst])
             current = dst
             state["size"] = [w, h]
+            state["caption_anchor"] = min(0.9, ratio + 0.05)
             steps.append({"op": kind, "layout": "facecam top / gameplay bottom",
                           "panel": plan["panel"], "corner": plan.get("corner"),
                           "coverage": plan.get("coverage"),
@@ -474,6 +477,24 @@ def render(src, ops, out_path, workdir, srt=None, music=None, style=None,
             if not plan.get("ok"):
                 steps.append({"op": kind, "skipped": plan.get("reason"),
                               "hint": "needs two faces on screen at the same time"})
+                continue
+            if plan.get("conversation") is False and getattr(_track, "SPEAKER_SIGNAL", False):
+                # Both faces are there but one voice holds the floor: stacking
+                # would waste half the frame, so take a tracked single crop.
+                try:
+                    one = _track.analyse(current, out_w=w, out_h=h)
+                    vf_one = one["filter"]
+                except Exception:
+                    vf_one = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+                              f"crop={w}:{h}")
+                run([FFMPEG, "-y", "-v", "error", "-i", current, "-vf", vf_one,
+                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                     "-c:a", "copy", dst])
+                current = dst
+                state["size"] = [w, h]
+                steps.append({"op": kind, "skipped": plan.get("speaker_reason"),
+                              "speaker_shares": plan.get("speaker_shares"),
+                              "layout": "single tracked crop instead"})
                 continue
             # each sample decides the layout: two faces split, one face normal
             try:
@@ -500,7 +521,9 @@ def render(src, ops, out_path, workdir, srt=None, music=None, style=None,
                 layout_note = "static split, two speakers throughout"
             current = dst
             state["size"] = [w, h]
+            state["caption_anchor"] = 0.5
             steps.append({"op": kind, "layout": "top/bottom",
+                          "speaker_shares": plan.get("speaker_shares"),
                           "panel": plan["panel"], "mode": layout_note,
                           "intervals": [{"from": a, "to": b, "layout": m}
                                         for a, b, m in intervals],
@@ -577,7 +600,8 @@ def render(src, ops, out_path, workdir, srt=None, music=None, style=None,
             dst = nxt()
             n = burn_captions(current, dst, srt, chosen, workdir,
                               tuple(state["size"]),
-                              kept=state.get("kept_ranges"))
+                              kept=state.get("kept_ranges"),
+                              anchor_frac=state.get("caption_anchor"))
             current = dst
             step = {"op": kind, "style": chosen, "ass_lines": n}
             if state.get("kept_ranges"):
