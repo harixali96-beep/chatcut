@@ -59,7 +59,7 @@ with tab_edit:
                          height=90)
     c1, c2 = st.columns(2)
     with c1:
-        style = st.selectbox("Caption style", ["auto"] + (engine.style_names() or [])[:40])
+        style = st.selectbox("Caption style", ["auto"] + (engine.list_styles() or [])[:40])
     with c2:
         use_llm = st.checkbox("Use a local model if one is running", value=False,
                               help="Ollama or LM Studio on this machine. No API key, no cost.")
