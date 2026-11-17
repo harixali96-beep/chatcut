@@ -8,6 +8,7 @@ gets a pass/fail list instead of a promise.
 Only measurable things are checked. Nothing here judges whether a clip is
 "good", because that is not something this code can know.
 """
+import os
 import re
 
 PROFANITY = ("fuck", "fucking", "shit", "bitch", "asshole", "bastard", "damn",
@@ -196,3 +197,45 @@ def verdict(rows):
         return True, f"all {len(rows)} checks pass"
     return False, f"{len(bad)} of {len(rows)} checks failed: " + \
                   ", ".join(r["check"] for r in bad[:4])
+
+
+def read_brief_file(path):
+    """Return (text, note) for an uploaded brief. Never raises.
+
+    A brief that cannot be read comes back as ("", reason) so the app can say
+    what happened instead of dying on the upload.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    name = os.path.basename(path)
+    try:
+        if ext == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                return "", "PDF needs the pypdf package"
+            pages = [(pg.extract_text() or "") for pg in PdfReader(path).pages]
+            text = "\n".join(pages).strip()
+            if not text:
+                return "", "PDF has no selectable text (a scan or an image?)"
+            return text, f"{len(pages)} page PDF"
+
+        if ext in (".docx", ".doc"):
+            import zipfile
+            with zipfile.ZipFile(path) as z:
+                xml = z.read("word/document.xml").decode("utf-8", "ignore")
+            text = re.sub(r"<[^>]+>", " ", xml)
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text:
+                return "", "DOCX had no text"
+            return text, "DOCX text"
+
+        if ext in (".txt", ".md", ".markdown", ".srt", ".json", ".csv"):
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read().strip()
+            if not text:
+                return "", f"{name} is empty"
+            return text, f"{ext.lstrip('.')} text, {len(text)} chars"
+
+        return "", f"{ext or 'that file'} is not a text brief"
+    except Exception as exc:
+        return "", f"could not read {name}: {exc}"

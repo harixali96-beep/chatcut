@@ -278,7 +278,7 @@ with tab_clips:
         hi = st.number_input("Longest clip (s)", 10, 180, 45)
     facecam = st.checkbox("Put a facecam on top, gameplay below", value=True)
     if st.button("Make clips", type="primary"):
-        src, how = source_path(video_f, link)
+        src, how = source_path(video_f, link, instr)
         if not src:
             st.error(how)
         else:
@@ -311,7 +311,7 @@ with tab_clips:
 with tab_tl:
     st.write("Load the video, edit the numbers, reorder rows, then render.")
     if st.button("Load timeline"):
-        src, how = source_path(video_f, link)
+        src, how = source_path(video_f, link, instr)
         if not src:
             st.error(how)
         else:

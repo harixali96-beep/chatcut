@@ -3,3 +3,4 @@ opencv-python-headless>=4.9
 streamlit>=1.36
 yt-dlp>=2024.1.0
 gdown>=5.0
+pypdf>=4.0
