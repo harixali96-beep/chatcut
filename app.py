@@ -32,7 +32,7 @@ def fetch_url(u, workdir=WORK, progress=None):
     return fetchsource.fetch(u, workdir, progress=progress)
 
 
-def source_path(upload, link, instruction=""):
+def source_path(video_f, link, instruction=""):
     """Upload first, then the sidebar link, then any link inside the message."""
     if upload is not None:
         dest = os.path.join(WORK, "in_" + os.path.basename(upload.name))
@@ -70,9 +70,33 @@ def route(text):
                      "extra": URL_RE.sub(" ", text or "").strip()}
 
 
+VIDEO_EXT = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+AUDIO_EXT = (".mp3", ".m4a", ".wav")
+
+
+def split_uploads(files):
+    """One share box, sorted by what the file actually is."""
+    video = audio = None
+    docs = []
+    for f in files or []:
+        ext = os.path.splitext(f.name)[1].lower()
+        if ext in VIDEO_EXT and video is None:
+            video = f
+        elif ext in AUDIO_EXT and audio is None:
+            audio = f
+        else:
+            docs.append(f)
+    return video, audio, docs
+
+
 with st.sidebar:
     st.header("Source")
-    upload = st.file_uploader("Upload a video", type=["mp4", "mov", "mkv", "webm", "m4v"])
+    uploads = st.file_uploader(
+        "One box: video, brief, music",
+        accept_multiple_files=True,
+        type=["mp4", "mov", "mkv", "webm", "m4v", "mp3", "m4a", "wav",
+              "txt", "md", "markdown", "pdf", "docx", "srt", "json"])
+    video_f, audio_f, docs = split_uploads(uploads)
     link = st.text_input("...or a link", placeholder="YouTube / Drive / direct MP4 URL")
     model_size = st.selectbox("Whisper model", ["tiny", "base", "small"], index=0)
     st.caption("tiny is fastest. bigger is more accurate and slower on CPU.")
@@ -94,19 +118,29 @@ with tab_edit:
         placeholder="Paste the reward brief. It enforces duration, aspect, captions, "
                     "brand mentions and banned words, then checks the clip against it.",
         height=80)
-    music = st.file_uploader("Background music (optional)", type=["mp3", "m4a", "wav"])
     if st.button("Run edit", type="primary"):
-        src, how = source_path(upload, link, instr)
+        src, how = source_path(video_f, link, instr)
         if not src:
             st.error(how)
         else:
             st.caption(f"Source: {how}")
             music_path = None
-            if music is not None:
-                music_path = os.path.join(WORK, "music_" + os.path.basename(music.name))
+            if audio_f is not None:
+                music_path = os.path.join(WORK, "music_" + os.path.basename(audio_f.name))
                 with open(music_path, "wb") as fh:
-                    fh.write(music.getbuffer())
-            br = brief.parse_brief(brief_text)
+                    fh.write(audio_f.getbuffer())
+            doc_text = ""
+            for d in docs or []:
+                dpath = os.path.join(WORK, "brief_" + os.path.basename(d.name))
+                with open(dpath, "wb") as fh:
+                    fh.write(d.getbuffer())
+                dt, dnote = brief.read_brief_file(dpath)
+                if dt.strip():
+                    doc_text += "\n" + dt
+                    st.caption(f"Read {d.name}: {dnote}")
+                else:
+                    st.warning(f"{d.name}: {dnote}")
+            br = brief.parse_brief((brief_text or "") + doc_text)
             if br:
                 st.caption("Brief reads as: " + brief.describe_brief(br))
                 extra = []
@@ -183,6 +217,13 @@ with tab_edit:
                     except Exception as exc:
                         st.error(f"failed: {exc}")
                         res = None
+            if res and not res.get("output"):
+                st.error(res.get("note") or "I could not find an edit in that sentence.")
+                if res.get("plan"):
+                    st.write("Understood:", res.get("plan"))
+                st.caption("Try words like: silence hatao, captions lagao, "
+                           "shorts banao, cinematic lagao, 3 clips bana do.")
+                res = None
             if res:
                 st.video(res["output"])
                 r = res.get("result") or {}
@@ -220,7 +261,7 @@ with tab_clips:
         hi = st.number_input("Longest clip (s)", 10, 180, 45)
     facecam = st.checkbox("Put a facecam on top, gameplay below", value=True)
     if st.button("Make clips", type="primary"):
-        src, how = source_path(upload, link)
+        src, how = source_path(video_f, link)
         if not src:
             st.error(how)
         else:
@@ -253,7 +294,7 @@ with tab_clips:
 with tab_tl:
     st.write("Load the video, edit the numbers, reorder rows, then render.")
     if st.button("Load timeline"):
-        src, how = source_path(upload, link)
+        src, how = source_path(video_f, link)
         if not src:
             st.error(how)
         else:
