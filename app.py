@@ -4,7 +4,7 @@ import streamlit as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import engine, transcribe, autoclip, describe, router, fetchsource, brief  # noqa: E402
+import engine, transcribe, autoclip, describe, router, fetchsource, brief, chatcut_ui  # noqa: E402
 try:
     import timeline_ui  # noqa: F401  (drag UI is Gradio-only; kept for the shared timeline JSON)
 except Exception:
@@ -14,8 +14,7 @@ WORK = tempfile.mkdtemp(prefix="chatcut-st-")
 os.makedirs(WORK, exist_ok=True)
 
 st.set_page_config(page_title="chatcut", page_icon="✂️", layout="wide")
-st.title("✂️ chatcut")
-st.caption("Chat to edit video. Free, local, open source. ffmpeg + whisper, no paid API.")
+
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"')]+")
@@ -34,10 +33,10 @@ def fetch_url(u, workdir=WORK, progress=None):
 
 def source_path(video_f, link, instruction=""):
     """Upload first, then the sidebar link, then any link inside the message."""
-    if upload is not None:
-        dest = os.path.join(WORK, "in_" + os.path.basename(upload.name))
+    if video_f is not None:
+        dest = os.path.join(WORK, "in_" + os.path.basename(video_f.name))
         with open(dest, "wb") as fh:
-            fh.write(upload.getbuffer())
+            fh.write(video_f.getbuffer())
         return dest, "upload"
     u = (link or "").strip()
     if not u:
@@ -89,6 +88,11 @@ def split_uploads(files):
     return video, audio, docs
 
 
+chatcut_ui.inject_css()
+if chatcut_ui.render_home(engine.list_styles()):
+    st.stop()
+chatcut_ui.editor_header()
+
 with st.sidebar:
     st.header("Source")
     uploads = st.file_uploader(
@@ -104,9 +108,12 @@ with st.sidebar:
 tab_edit, tab_clips, tab_tl = st.tabs(["Edit", "Auto clips", "Timeline"])
 
 with tab_edit:
-    instr = st.text_area("What should it do?",
-                         "silence hatao, shorts banao, captions lagao aur cinematic lagao",
-                         height=90)
+    instr = st.text_area(
+        "What should it do?",
+        st.session_state.get(
+            "instruction",
+            "silence hatao, shorts banao, captions lagao aur cinematic lagao"),
+        height=90)
     c1, c2 = st.columns(2)
     with c1:
         style = st.selectbox("Caption style", ["auto"] + (engine.list_styles() or [])[:40])
