@@ -235,9 +235,16 @@ with tab_edit:
                 st.video(res["output"])
                 r = res.get("result") or {}
                 st.success(f"{r.get('duration')}s · {r.get('size')} · audio {r.get('has_audio')}")
+                _sd = (engine.probe(src) or {}).get("duration") or 0
+                _out = r.get("duration") or 0
+                if _sd:
+                    _same = abs(_sd - _out) < 1.5
+                    st.caption(f"source {_sd:.1f}s -> output {_out:.1f}s"
+                               + ("  · runtime preserved" if _same else ""))
                 if (res.get("plan") or {}).get("auto_plan"):
                     st.info("Koi specific edit nahi mila, to default plan lagaya: "
-                            "silence cut + 9:16 + captions + loudness")
+                            "9:16 + captions + loudness. Video ki lambai waisi hi rahegi. "
+                            "Silence hatana ho to 'silence hatao' likho.")
                 if br:
                     tw = res.get("transcript") or {}
                     rows = brief.compliance(br, duration=r.get("duration"), size=r.get("size"),

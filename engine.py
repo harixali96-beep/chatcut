@@ -377,6 +377,23 @@ def render(src, ops, out_path, workdir, srt=None, music=None, style=None,
                 continue
             sil = detect_silences(current, op.get("min_ms", 500))
             cur_dur = probe(current)["duration"]
+            # A silence cut must never eat the video. Remove at most max_removal
+            # of the runtime, longest silences first, and say so when the cap bites.
+            max_removal = float(op.get("max_removal", 0.90))
+            budget = cur_dur * max_removal
+            spent, caught = 0.0, []
+            for s, e in sorted(sil, key=lambda p: p[1] - p[0], reverse=True):
+                if spent + (e - s) <= budget:
+                    caught.append((s, e))
+                    spent += e - s
+            caught.sort()
+            total_sil = sum(e - s for s, e in sil)
+            cap_note = None
+            if len(caught) < len(sil) and total_sil > 0:
+                cap_note = (f"capped at {max_removal:.0%} of runtime: removed the "
+                            f"{len(caught)} longest of {len(sil)} silences "
+                            f"({total_sil:.1f}s of silence existed)")
+            sil = caught
             kept = keep_ranges(cur_dur, sil)
             if not kept:
                 kept = [(0, cur_dur)]
@@ -407,7 +424,8 @@ def render(src, ops, out_path, workdir, srt=None, music=None, style=None,
             removed = round(cur_dur - probe(dst)["duration"], 2)
             steps.append({"op": kind, "silences_found": len(sil),
                           "segments_kept": len(kept), "seconds_removed": removed,
-                          "cut_points": cuts[:12]})
+                          "removed_pct": round(100.0 * removed / cur_dur, 1),
+                          "cap": cap_note, "cut_points": cuts[:12]})
 
         elif kind in ("vertical", "track"):
             w, h = op.get("width", 1080), op.get("height", 1920)
@@ -814,8 +832,9 @@ def timeline_fcpxml(result, out_path, fps=25.0):
 
 
 # ------------------------------------------------------------------- api
+# The default plan must never shorten the video on its own. Silence cutting is
+# opt-in: "edit krke de" keeps your runtime, it only reframes and captions.
 DEFAULT_OPS = [
-    {"op": "cut_silence", "min_ms": 500},
     {"op": "vertical", "width": 1080, "height": 1920},
     {"op": "captions"},
     {"op": "loudnorm"},
@@ -867,7 +886,7 @@ def edit(src, instruction, out_path, srt=None, music=None, style=None,
         result["plan"] = plan
         if auto_planned:
             result["note"] = ("no specific edit was named, so the default plan ran: "
-                              "silence cut, 9:16, captions, loudness")
+                              "9:16, captions, loudness. The runtime is unchanged.")
         tl = timeline_json(plan, result, src)
         result["timeline"] = tl
         if tl_dir:
