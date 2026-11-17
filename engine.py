@@ -814,11 +814,24 @@ def timeline_fcpxml(result, out_path, fps=25.0):
 
 
 # ------------------------------------------------------------------- api
+DEFAULT_OPS = [
+    {"op": "cut_silence", "min_ms": 500},
+    {"op": "vertical", "width": 1080, "height": 1920},
+    {"op": "captions"},
+    {"op": "loudnorm"},
+]
+
+
 def edit(src, instruction, out_path, srt=None, music=None, style=None,
          plan_only=False, tl_dir=None, auto_transcribe=True, model=None,
-         want_description=False, ops=None):
-    ops = order_ops(ops if ops is not None else parse_instruction(instruction))
-    plan = {"instruction": instruction, "ops": ops}
+         want_description=False, ops=None, auto_plan=True):
+    parsed = ops if ops is not None else parse_instruction(instruction)
+    ops = order_ops(parsed)
+    auto_planned = False
+    if not ops and auto_plan and not plan_only:
+        ops = order_ops([dict(o) for o in DEFAULT_OPS])
+        auto_planned = True
+    plan = {"instruction": instruction, "ops": ops, "auto_plan": auto_planned}
     if plan_only or not ops:
         return {"plan": plan, "steps": [], "note": "no renderable ops parsed"}
     for o in ops:
@@ -852,6 +865,9 @@ def edit(src, instruction, out_path, srt=None, music=None, style=None,
             except Exception as exc:
                 result["description"] = {"error": str(exc)}
         result["plan"] = plan
+        if auto_planned:
+            result["note"] = ("no specific edit was named, so the default plan ran: "
+                              "silence cut, 9:16, captions, loudness")
         tl = timeline_json(plan, result, src)
         result["timeline"] = tl
         if tl_dir:

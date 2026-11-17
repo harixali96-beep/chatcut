@@ -235,6 +235,9 @@ with tab_edit:
                 st.video(res["output"])
                 r = res.get("result") or {}
                 st.success(f"{r.get('duration')}s · {r.get('size')} · audio {r.get('has_audio')}")
+                if (res.get("plan") or {}).get("auto_plan"):
+                    st.info("Koi specific edit nahi mila, to default plan lagaya: "
+                            "silence cut + 9:16 + captions + loudness")
                 if br:
                     tw = res.get("transcript") or {}
                     rows = brief.compliance(br, duration=r.get("duration"), size=r.get("size"),

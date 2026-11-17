@@ -151,19 +151,19 @@ def compliance(brief, *, duration=None, size=None, steps=None, text="", segments
             actual = "unknown"
         rows.append({"check": "aspect", "brief": want, "actual": actual, "pass": actual == want})
 
-    if brief.get("captions") is True:
+    if brief.get("captions") is True and steps:
         rows.append({"check": "captions", "brief": "burned in",
                      "actual": "yes" if "captions" in kinds else "no",
                      "pass": "captions" in kinds})
 
-    if brief.get("music") is True:
+    if brief.get("music") is True and steps:
         rows.append({"check": "music", "brief": "present",
                      "actual": "yes" if "music" in kinds else "no", "pass": "music" in kinds})
-    elif brief.get("music") is False:
+    elif brief.get("music") is False and steps:
         rows.append({"check": "music", "brief": "none",
                      "actual": "yes" if "music" in kinds else "no", "pass": "music" not in kinds})
 
-    if brief.get("sfx"):
+    if brief.get("sfx") and steps:
         rows.append({"check": "sfx", "brief": "present",
                      "actual": "yes" if "effects" in kinds or "sfx" in kinds else "no",
                      "pass": "effects" in kinds or "sfx" in kinds})

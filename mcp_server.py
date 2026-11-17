@@ -83,6 +83,43 @@ TOOLS = [
             "required": ["path"],
         },
     },
+    {
+        "name": "chatcut_brief",
+        "description": (
+            "Read a content brief (Whop reward rules etc.) and report the measurable "
+            "constraints it asks for: duration, aspect, captions, hook, music, sfx, brand "
+            "mention, banned words. Pass seconds/size/text to also check a finished clip."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "brief": {"type": "string"},
+                "seconds": {"type": "number"},
+                "size": {"type": "string", "description": "like 1080x1920"},
+                "text": {"type": "string", "description": "clip transcript, to verify mentions"},
+            },
+            "required": ["brief"],
+        },
+    },
+    {
+        "name": "chatcut_autopilot",
+        "description": (
+            "Edit a video and never come back empty. If the sentence names no edit, the "
+            "default plan runs: silence cut, 9:16, captions, loudness. Give a brief and its "
+            "rules are folded in and then checked against the finished clip."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "local video path"},
+                "instruction": {"type": "string", "description": "what to do, plain language"},
+                "brief": {"type": "string", "description": "optional reward brief"},
+                "output": {"type": "string"},
+                "music": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 
@@ -121,6 +158,43 @@ def call_tool(name, args):
                                                  "window", "result")}
                           for c in res.get("clips", [])]}
         return _text(slim)
+    if name == "chatcut_brief":
+        import brief as _b
+        br = _b.parse_brief(args["brief"])
+        rows = []
+        if args.get("seconds") is not None or args.get("size"):
+            rows = _b.compliance(br, duration=args.get("seconds"), size=args.get("size"),
+                                 text=args.get("text", ""))
+        return _text({"reads_as": _b.describe_brief(br), "constraints": br,
+                      "checks": rows, "verdict": _b.verdict(rows)})
+    if name == "chatcut_autopilot":
+        import brief as _b
+        br = _b.parse_brief(args.get("brief") or "")
+        instr = args.get("instruction") or ""
+        extra = []
+        if br.get("captions"):
+            extra.append("captions lagao")
+        if br.get("music"):
+            extra.append("background music dalo")
+        if br.get("sfx"):
+            extra.append("sfx lagao")
+        if br.get("aspect") == "9:16":
+            extra.append("shorts banao")
+        if extra:
+            instr = (instr.rstrip(" ,") + ", " + ", ".join(extra)).strip(", ")
+        out = args.get("output") or os.path.join(
+            tempfile.mkdtemp(prefix="chatcut-mcp-"), "out.mp4")
+        res = engine.edit(args["path"], instr, out, music=args.get("music"),
+                          want_description=True)
+        r = res.get("result") or {}
+        rows = _b.compliance(br, duration=r.get("duration"), size=r.get("size"),
+                             steps=res.get("steps"),
+                             text=(res.get("transcript") or {}).get("text", "")) if br else []
+        keep = {k: res.get(k) for k in ("output", "plan", "steps", "result",
+                                        "description", "note")}
+        keep["brief"] = ({"reads_as": _b.describe_brief(br), "checks": rows,
+                          "verdict": _b.verdict(rows)} if br else None)
+        return _text(keep)
     if name == "chatcut_transcribe":
         tr = transcribe.transcribe(args["path"], model_size=args.get("model", "tiny"))
         return _text({"language": tr.get("language"), "text": tr.get("text"),
