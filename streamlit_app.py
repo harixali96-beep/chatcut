@@ -4,7 +4,7 @@ import streamlit as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import engine, transcribe, autoclip, describe, router  # noqa: E402
+import engine, transcribe, autoclip, describe, router, fetchsource, brief  # noqa: E402
 try:
     import timeline_ui  # noqa: F401  (drag UI is Gradio-only; kept for the shared timeline JSON)
 except Exception:
@@ -27,32 +27,9 @@ def find_url(text):
     return m.group(0).rstrip(".,)") if m else None
 
 
-def fetch_url(u):
-    """Download a Drive / YouTube / direct link to a local file."""
-    if u.startswith("file://"):
-        u = u[7:]
-    if os.path.exists(u):
-        return u, "local path"
-    if "drive.google.com" in u or "docs.google.com" in u:
-        try:
-            import gdown
-            dest = os.path.join(WORK, "drive_input.mp4")
-            gdown.download(url=u, output=dest, quiet=True, fuzzy=True)
-            if os.path.exists(dest) and os.path.getsize(dest) > 10000:
-                return dest, "google drive"
-            return None, ("The Drive download came back empty. Set the file to "
-                          "'Anyone with the link' and paste the link again.")
-        except Exception as exc:
-            return None, f"Drive download failed: {exc}"
-    try:
-        import yt_dlp
-        out = os.path.join(WORK, "link_%(id)s.%(ext)s")
-        with yt_dlp.YoutubeDL({"outtmpl": out, "format": "mp4/best",
-                               "quiet": True, "noplaylist": True}) as ydl:
-            info = ydl.extract_info(u, download=True)
-            return ydl.prepare_filename(info), "downloaded"
-    except Exception as exc:
-        return None, f"could not fetch the link: {exc}"
+def fetch_url(u, workdir=WORK, progress=None):
+    """Any link: Drive, YouTube, Twitch, or a direct file."""
+    return fetchsource.fetch(u, workdir, progress=progress)
 
 
 def source_path(upload, link, instruction=""):
@@ -112,6 +89,11 @@ with tab_edit:
     with c2:
         use_llm = st.checkbox("Use a local model if one is running", value=False,
                               help="Ollama or LM Studio on this machine. No API key, no cost.")
+    brief_text = st.text_area(
+        "Brief (optional)", "",
+        placeholder="Paste the reward brief. It enforces duration, aspect, captions, "
+                    "brand mentions and banned words, then checks the clip against it.",
+        height=80)
     music = st.file_uploader("Background music (optional)", type=["mp3", "m4a", "wav"])
     if st.button("Run edit", type="primary"):
         src, how = source_path(upload, link, instr)
@@ -124,7 +106,27 @@ with tab_edit:
                 music_path = os.path.join(WORK, "music_" + os.path.basename(music.name))
                 with open(music_path, "wb") as fh:
                     fh.write(music.getbuffer())
+            br = brief.parse_brief(brief_text)
+            if br:
+                st.caption("Brief reads as: " + brief.describe_brief(br))
+                extra = []
+                if br.get("captions"):
+                    extra.append("captions lagao")
+                if br.get("music"):
+                    extra.append("background music dalo")
+                if br.get("sfx"):
+                    extra.append("sfx lagao")
+                if br.get("aspect") == "9:16" and "shorts" not in instr.lower():
+                    extra.append("shorts banao")
+                if extra:
+                    instr = instr + ", " + ", ".join(extra)
             mode, kw = route(URL_RE.sub(" ", instr))
+            if br:
+                if br.get("duration_min"):
+                    kw["min_len"] = float(br["duration_min"])
+                if br.get("duration_max"):
+                    kw["max_len"] = float(br["duration_max"])
+                kw.setdefault("aspect", br.get("aspect"))
             res = None
             if mode == "clips":
                 st.info(f"Making {kw['n']} clips of about "
@@ -153,6 +155,14 @@ with tab_edit:
                         st.caption(f"{c['window']['start']}-{c['window']['end']}s"
                                    f" · score {c['score']}")
                         st.video(c["file"])
+                        if br:
+                            rows = brief.compliance(
+                                br, duration=c["result"].get("duration"),
+                                size=c["result"].get("size"),
+                                steps=c.get("steps"), text=c.get("text"))
+                            ok, msg = brief.verdict(rows)
+                            (st.success if ok else st.warning)(f"Brief: {msg}")
+                            st.dataframe(rows, use_container_width=True, hide_index=True)
                         with open(c["file"], "rb") as fh:
                             st.download_button(f"Download clip {c['index']}", fh.read(),
                                                file_name=os.path.basename(c["file"]),
@@ -177,6 +187,14 @@ with tab_edit:
                 st.video(res["output"])
                 r = res.get("result") or {}
                 st.success(f"{r.get('duration')}s · {r.get('size')} · audio {r.get('has_audio')}")
+                if br:
+                    tw = res.get("transcript") or {}
+                    rows = brief.compliance(br, duration=r.get("duration"), size=r.get("size"),
+                                            steps=res.get("steps"), text=tw.get("text", ""),
+                                            segments=tw.get("segments"))
+                    ok, msg = brief.verdict(rows)
+                    (st.success if ok else st.warning)(f"Brief: {msg}")
+                    st.dataframe(rows, use_container_width=True, hide_index=True)
                 with open(res["output"], "rb") as fh:
                     st.download_button("Download the video", fh.read(),
                                        file_name="chatcut_edit.mp4", mime="video/mp4")
