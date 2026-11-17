@@ -130,7 +130,7 @@ def window_srt(segments, start, end, path):
 
 
 def auto_clip(src, outdir=None, n=3, min_len=15.0, max_len=45.0, model=None,
-              style=None, want_facecam=True, progress=None):
+              style=None, want_facecam=True, progress=None, extra=""):
     outdir = outdir or tempfile.mkdtemp(prefix="chatcut-clips-")
     os.makedirs(outdir, exist_ok=True)
     def say(msg):
@@ -164,16 +164,26 @@ def auto_clip(src, outdir=None, n=3, min_len=15.0, max_len=45.0, model=None,
         srt = window_srt(segments, c["start"], c["end"],
                          os.path.join(wd, "clip.srt"))
 
-        ops = ["captions lagao"]
-        if want_facecam:
-            ops.append("facecam upar rakho, gameplay neechay")
-        else:
-            ops.append("shorts banao")
-        instruction = ", ".join(ops)
+        base = ["captions lagao",
+                "facecam upar rakho, gameplay neechay" if want_facecam
+                else "shorts banao"]
+        merged = {o["op"]: o for o in engine.parse_instruction(", ".join(base))}
+        for o in engine.parse_instruction(extra or ""):
+            merged.setdefault(o["op"], o)
+        framing = {"streamer", "podcast", "track", "vertical"}
+        present = [k for k in merged if k in framing]
+        keep = ("streamer" if (want_facecam and "streamer" in merged) else
+                "podcast" if "podcast" in merged else
+                "track" if "track" in merged else
+                present[0] if present else None)
+        for k in present:
+            if k != keep:
+                merged.pop(k, None)
+        clip_ops = engine.order_ops(list(merged.values()))
 
         out = os.path.join(outdir, f"clip_{idx:02d}.mp4")
         try:
-            result = engine.edit(cut, instruction, out, srt=srt, style=style)
+            result = engine.edit(cut, "", out, srt=srt, style=style, ops=clip_ops)
         except Exception as exc:
             clips.append({"index": idx, "error": str(exc), "window": c})
             continue
