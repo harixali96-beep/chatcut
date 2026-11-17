@@ -1,9 +1,16 @@
-[theme]
-primaryColor = "#7C3AED"
-backgroundColor = "#0B0F1A"
-secondaryBackgroundColor = "#141B2D"
-textColor = "#F5F7FA"
-font = "sans serif"
-
 [server]
-enableStaticServing = true
+headless = true
+maxUploadSize = 500
+enableCORS = false
+enableXsrfProtection = false
+enableWebsocketCompression = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#7C3AED"
+backgroundColor = "#11131a"
+secondaryBackgroundColor = "#141B2D"
+textColor = "#f5f7fa"
